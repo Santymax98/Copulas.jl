@@ -37,14 +37,10 @@ end
 ϕ(  C::GumbelBarnettCopula,       t) = exp((1-exp(t))/C.θ)
 ϕ⁻¹(C::GumbelBarnettCopula,       t) = log(1-C.θ*log(t))
 function τ(C::GumbelBarnettCopula)
-    # Define the function to integrate
-    f(x) = -x * (1 - C.θ * log(x)) * log(1 - C.θ * log(x)) / C.θ
-    result = Distributions.expectation(f,Distributions.Uniform(0,1))
-    # Calculate the integral using GSL
-    # result = 
-    # result, _ = GSL.integration_qags(f, 0.0, 1.0, [C.θ], 1e-7, 1000)
-    
-    return 1+4*result
+
+  # Uses a numerical method to approximate the integral
+  result, _  = quadgk(-x * (1 - C.θ * log(x)) * log(1 - C.θ * log(x)) / C.θ, 0, 1)
+  return 1+4*result
 end
 function τ⁻¹(::Type{GumbelBarnettCopula}, tau)
     if tau == zero(tau)
