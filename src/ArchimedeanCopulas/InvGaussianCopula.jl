@@ -39,13 +39,11 @@ end
 ϕ(  C::InvGaussianCopula,       t) = exp((1-sqrt(1+2*((C.θ)^(2))*t))/C.θ)
 ϕ⁻¹(C::InvGaussianCopula,       t) = ((1-C.θ*log(t))^(2)-1)/(2*(C.θ)^(2))
 function τ(C::InvGaussianCopula)
-    # Define the function to integrate
-    f(x) = -x * (((1 - C.θ * log(x))^2 - 1) / (2 * C.θ * (1 - C.θ * log(x))))
-
+    
     # Calculate the integral using an appropriate numerical integration method
-    result, _ = gsl_integration_qags(f, 0.0, 1.0, [C.θ], 1e-7, 1000)
+    integral, _ = quadgk(x -> -x * (((1 - C.θ * log(x))^2 - 1) / (2 * C.θ * (1 - C.θ * log(x)))), 0, 1, rtol=1e-3)
 
-    return 1+4*result
+    return 1+4*integral
 end
 function τ⁻¹(::Type{InvGaussianCopula}, τ)
     if τ == zero(τ)
