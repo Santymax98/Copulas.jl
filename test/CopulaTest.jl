@@ -7,6 +7,7 @@ Copulas.testname(::MockHypothesis) = "Mock copula hypothesis test"
 Copulas.nullhypothesis(::MockHypothesis) = "The mock null hypothesis holds."
 Copulas._available_statistics(::MockHypothesis) = (:mean, :sum)
 Copulas._available_calibrations(::MockHypothesis, ::Val{:mean}) = (:simulation,)
+Copulas._available_calibrations(::MockHypothesis, ::Val{:sum}) = (:simulation,)
 Copulas._teststatistic(::MockHypothesis, ::Val{:mean}, U::AbstractMatrix; kwargs...) =
     sum(U) / length(U)
 Copulas._teststatistic(::MockHypothesis, ::Val{:sum}, U::AbstractMatrix; kwargs...) = sum(U)
@@ -16,11 +17,6 @@ function Copulas._simulation_sample(::MockHypothesis, U::AbstractMatrix, rng::Di
     Random.rand!(rng, sample)
     return sample
 end
-
-Copulas._available_statistics(::Copulas.IndependenceHypothesis) = (:cvm, :first_margin_mean)
-Copulas._available_calibrations(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mean}) = (:simulation,)
-
-Copulas._teststatistic(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mean}, U::AbstractMatrix; kwargs...) = sum(@view U[1, :]) / size(U, 2)
 
 @testset "Copula hypothesis tests [copula_tests]" begin
     @testset "Extensible framework" begin
@@ -44,11 +40,11 @@ Copulas._teststatistic(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mea
         @test occursin("Mock copula hypothesis test", printed)
         @test occursin("The mock null hypothesis holds.", printed)
 
-        extended = IndependenceCopulaTest(U; statistic=:first_margin_mean,
-            N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
-        @test extended isa IndependenceCopulaTest
-        @test extended.statistic === :first_margin_mean
-        @test isfinite(teststatistic(extended))
+        other = CopulaTest(MockHypothesis(), U; statistic=:sum, N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
+        @test other isa CopulaTest{MockHypothesis}
+        @test other.statistic === :sum
+        @test other.calibration === :simulation
+        @test isfinite(teststatistic(other))
         @test IndependenceCopulaTest(U; N=2, rng=Xoshiro(1)).statistic === :cvm
 
         stat_err = try
@@ -58,6 +54,7 @@ Copulas._teststatistic(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mea
         end
         @test stat_err isa ArgumentError
         @test occursin("Statistic :missing", sprint(showerror, stat_err))
+        @test occursin("Available statistics: :mean, :sum", sprint(showerror, stat_err))
 
         cal_err = try
             CopulaTest(MockHypothesis(), U; calibration=:multiplier, N=2)
@@ -66,6 +63,7 @@ Copulas._teststatistic(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mea
         end
         @test cal_err isa ArgumentError
         @test occursin("Calibration :multiplier", sprint(showerror, cal_err))
+        @test occursin("Available calibrations: :simulation", sprint(showerror, cal_err))
 
         @test !(:testname in names(Copulas))
     end

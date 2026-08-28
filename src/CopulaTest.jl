@@ -62,24 +62,48 @@ Return the textual null hypothesis for a copula hypothesis or test. This is an e
 """
 nullhypothesis(test::CopulaTest) = nullhypothesis(test.hypothesis)
 
+"""
+    _available_statistics(h::CopulaHypothesis)
+
+Return the statistic symbols available for `h`. The first entry is the default, mirroring `_available_fitting_methods`.
+"""
 function _available_statistics(h::CopulaHypothesis)
     throw(ArgumentError("No statistics are implemented for $(nameof(typeof(h)))."))
 end
 
 function default_statistic(h::CopulaHypothesis)
-    statistics = _available_statistics(h)
-    isempty(statistics) && throw(ArgumentError("No statistics are implemented for $(nameof(typeof(h)))."))
-    return first(statistics)
+    return _find_statistic(h, :default)
 end
 
+"""
+    _available_calibrations(h::CopulaHypothesis, ::Val{statistic})
+
+Return the calibration symbols available for a hypothesis/statistic pair. The first entry is the default calibration.
+"""
 function _available_calibrations(h::CopulaHypothesis, ::Val{statistic}) where {statistic}
     throw(ArgumentError("Statistic :$statistic is not implemented for $(nameof(typeof(h)))."))
 end
 
 function default_calibration(h::CopulaHypothesis, stat::Val)
+    return _find_calibration(h, stat, :default)
+end
+
+_symbol_list(symbols) = join((":" * String(symbol) for symbol in symbols), ", ")
+
+function _find_statistic(h::CopulaHypothesis, statistic::Symbol)
+    statistics = _available_statistics(h)
+    isempty(statistics) && throw(ArgumentError("No statistics are available for $(nameof(typeof(h)))."))
+    statistic === :default && return first(statistics)
+    statistic in statistics || throw(ArgumentError("Statistic :$statistic is not available for $(nameof(typeof(h))). Available statistics: $(_symbol_list(statistics))."))
+    return statistic
+end
+
+function _find_calibration(h::CopulaHypothesis, stat::Val{statistic}, calibration::Symbol) where {statistic}
     calibrations = _available_calibrations(h, stat)
-    isempty(calibrations) && throw(ArgumentError("No calibrations are implemented for $(nameof(typeof(h))) with this statistic."))
-    return first(calibrations)
+    isempty(calibrations) && throw(ArgumentError("No calibrations are available for statistic :$statistic under $(nameof(typeof(h)))."))
+    calibration === :default && return first(calibrations)
+    calibration in calibrations || throw(ArgumentError("Calibration :$calibration is not available for statistic :$statistic under $(nameof(typeof(h))). Available calibrations: $(_symbol_list(calibrations))."))
+    return calibration
 end
 
 function _teststatistic(h::CopulaHypothesis, ::Val{statistic}, U::AbstractMatrix; kwargs...) where {statistic}
@@ -95,20 +119,17 @@ end
 
 Run a copula hypothesis test.
 
-`statistic` and `calibration` are public symbols and are converted internally to `Val` dispatch. New hypotheses, statistics, 
-and calibrations extend the framework by adding methods, not by modifying this constructor.
+`statistic` and `calibration` are public symbols and are converted internally to `Val` dispatch. New hypotheses, statistics, and calibrations extend the framework by adding methods, not by modifying this constructor.
 """
-function CopulaTest(h::CopulaHypothesis, U::AbstractMatrix{<:Real}; statistic::Symbol=default_statistic(h), calibration::Symbol=:default,
+function CopulaTest(h::CopulaHypothesis, U::AbstractMatrix{<:Real}; statistic::Symbol=:default, calibration::Symbol=:default,
                     N::Integer=1000, pseudo_values::Bool=false, rng::Distributions.AbstractRNG=Random.default_rng(), kwargs...)
-
-    N >= 1 || throw(ArgumentError("`N` must be positive."))
-
     V, d, n = _test_pseudos(U, pseudo_values)
+    statistic = _find_statistic(h, statistic)
     stat = Val(statistic)
+    calibration = _find_calibration(h, stat, calibration)
     observed = _teststatistic(h, stat, V; kwargs...)
-    calibration = calibration === :default ? default_calibration(h, stat) : calibration
-    p, details = _calibrate(h, Val(calibration), stat, V, observed; N=Int(N), rng=rng, kwargs...)
-    return CopulaTest(h, n, d, observed, p, Int(N), statistic, calibration, details)
+    p, n_resamples, details = _calibrate(h, Val(calibration), stat, V, observed; N=Int(N), rng=rng, kwargs...)
+    return CopulaTest(h, n, d, observed, p, n_resamples, statistic, calibration, details)
 end
 
 function _test_pseudos(U::AbstractMatrix{<:Real}, pseudo_values::Bool)
@@ -135,17 +156,23 @@ function _exceedance_pvalue(exceedances::Integer, N::Integer; correction=0.5)
     return (correction + exceedances) / (N + 1)
 end
 
+function _check_resamples(N::Integer)
+    N >= 1 || throw(ArgumentError("`N` must be positive."))
+    return Int(N)
+end
+
 function _simulation_sample(h::CopulaHypothesis, U::AbstractMatrix, rng::Distributions.AbstractRNG)
     throw(ArgumentError("Simulation under the null is not implemented for $(nameof(typeof(h)))."))
 end
 
 function _calibrate(h::CopulaHypothesis, ::Val{:simulation}, stat::Val, U::AbstractMatrix, observed::Real; N::Integer, rng::Distributions.AbstractRNG, kwargs...)
+    N = _check_resamples(N)
     exceedances = 0
     for _ in 1:N
         sample = pseudos(_simulation_sample(h, U, rng))
         exceedances += _teststatistic(h, stat, sample; kwargs...) >= observed
     end
-    return _exceedance_pvalue(exceedances, N), (;)
+    return _exceedance_pvalue(exceedances, N), N, (;)
 end
 
 function _randomization_sample(h::CopulaHypothesis, U::AbstractMatrix, rng::Distributions.AbstractRNG)
@@ -155,12 +182,13 @@ end
 _randomization_details(::CopulaHypothesis) = (;)
 
 function _calibrate(h::CopulaHypothesis, ::Val{:randomization}, stat::Val, U::AbstractMatrix, observed::Real; N::Integer, rng::Distributions.AbstractRNG, kwargs...)
+    N = _check_resamples(N)
     exceedances = 0
     for _ in 1:N
         sample = pseudos(_randomization_sample(h, U, rng))
         exceedances += _teststatistic(h, stat, sample; kwargs...) >= observed
     end
-    return _exceedance_pvalue(exceedances, N), _randomization_details(h)
+    return _exceedance_pvalue(exceedances, N), N, _randomization_details(h)
 end
 
 function _multiplier_representation(h::CopulaHypothesis, ::Val{statistic}, U::AbstractMatrix) where {statistic}
@@ -168,13 +196,14 @@ function _multiplier_representation(h::CopulaHypothesis, ::Val{statistic}, U::Ab
 end
 
 function _calibrate(h::CopulaHypothesis, ::Val{:multiplier}, stat::Val, U::AbstractMatrix, observed::Real; N::Integer, rng::Distributions.AbstractRNG, kwargs...)
+    N = _check_resamples(N)
     rep = _multiplier_representation(h, stat, U)
     p = _multiplier_pvalue(rep.matrices, observed, N, rng;
         weights=get(rep, :weights, nothing),
         scale=rep.scale,
         strict=get(rep, :strict, false),
         correction=get(rep, :correction, 0.5))
-    return p, get(rep, :details, (;))
+    return p, N, get(rep, :details, (;))
 end
 
 function _multiplier_pvalue(matrices, observed::Real, N::Integer, rng::Distributions.AbstractRNG; weights=nothing, scale::Real, strict::Bool=false, correction=0.5)
@@ -219,6 +248,7 @@ end
 _bootstrap_hypothesis(h::CopulaHypothesis, ::AbstractMatrix) = h
 
 function _calibrate(h::CopulaHypothesis, ::Val{:parametric_bootstrap}, stat::Val, U::AbstractMatrix, observed::Real; N::Integer, rng::Distributions.AbstractRNG, kwargs...)
+    N = _check_resamples(N)
     _, n = size(U)
     exceedances = 0
     for _ in 1:N
@@ -226,7 +256,7 @@ function _calibrate(h::CopulaHypothesis, ::Val{:parametric_bootstrap}, stat::Val
         bootstrap_hypothesis = _bootstrap_hypothesis(h, sample)
         exceedances += _teststatistic(bootstrap_hypothesis, stat, sample; kwargs...) >= observed
     end
-    return _exceedance_pvalue(exceedances, N), (;)
+    return _exceedance_pvalue(exceedances, N), N, (;)
 end
 
 ################################################################################
