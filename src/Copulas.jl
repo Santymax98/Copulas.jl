@@ -202,6 +202,7 @@ module Copulas
            BetaCopula,
            CheckerboardCopula,
            CopulaModel,
+           CopulaHypothesis,
            CopulaTest,
            IndependenceCopulaTest,
            ExchangeabilityCopulaTest,
@@ -210,7 +211,6 @@ module Copulas
            GOFCopulaTest,
            pvalue,
            teststatistic,
-           testname,
            selectiontable
 
 end

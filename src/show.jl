@@ -319,66 +319,59 @@ end
 ##### Copula hypothesis tests
 ###############################################################################
 
-_nullhypothesis(::IndependenceCopulaTest) =
-    "The components are mutually independent."
-_nullhypothesis(::ExchangeabilityCopulaTest) =
-    "The copula is exchangeable."
-_nullhypothesis(::RadialSymmetryCopulaTest) =
-    "The copula is radially symmetric."
-_nullhypothesis(::ExtremeValueCopulaTest) =
-    "The copula belongs to the extreme-value class."
-_nullhypothesis(test::GOFCopulaTest) =
-    test.hypothesis === :simple   ? "The data follow the specified copula." :
-    test.hypothesis === :selected ? "At least one candidate copula family adequately describes the dependence." :
-                                    "The data belong to the specified copula family."
-
-_show_test_model(::IO, ::CopulaTest) = nothing
-function _show_test_model(io::IO, test::GOFCopulaTest)
+_show_test_model(::IO, ::CopulaHypothesis, ::Val, ::Val, ::NamedTuple) = nothing
+function _show_test_model(io::IO, h::GoodnessOfFitHypothesis, ::Val, ::Val, ::NamedTuple)
     label =
-        test.hypothesis === :simple   ? "Specified copula" :
-        test.hypothesis === :selected ? "Selected model" :
-                                        "Fitted model"
-    model = test.model isa CopulaModel ? _copula_of(test.model) : test.model
+        h.kind === :simple   ? "Specified copula" :
+        h.kind === :selected ? "Selected model" :
+                               "Fitted model"
+    model = h.model isa CopulaModel ? _copula_of(h.model) : h.model
     model_label = replace(string(typeof(model)), "Copulas." => "")
-    println(io, "Hypothesis:             ", test.hypothesis)
+    println(io, "Hypothesis:             ", h.kind)
     println(io, label, ":           ", model_label)
 end
 
-_show_test_details(::IO, ::CopulaTest) = nothing
-function _show_test_details(io::IO, test::ExchangeabilityCopulaTest)
-    hasproperty(test.details, :permutations) || return nothing
-    println(io, "Permutations:           ", test.details.permutations)
-    println(io, "Weight:                 ", test.details.weight)
-    if hasproperty(test.details, :multiplier)
-        println(io, "Multiplier:             ", test.details.multiplier)
+_show_test_details(::IO, ::CopulaHypothesis, ::Val, ::Val, ::NamedTuple) = nothing
+function _show_test_details(io::IO, ::ExchangeabilityHypothesis, ::Val{:Sn},
+        ::Val{:multiplier}, details::NamedTuple)
+    hasproperty(details, :permutations) || return nothing
+    println(io, "Permutations:           ", details.permutations)
+    println(io, "Weight:                 ", details.weight)
+    if hasproperty(details, :multiplier)
+        println(io, "Multiplier:             ", details.multiplier)
     end
-    if hasproperty(test.details, :derivative_bandwidth)
-        println(io, "Derivative bandwidth:   ", test.details.derivative_bandwidth)
+    if hasproperty(details, :derivative_bandwidth)
+        println(io, "Derivative bandwidth:   ", details.derivative_bandwidth)
     end
 end
 
-function _show_test_details(io::IO, test::RadialSymmetryCopulaTest)
-    hasproperty(test.details, :reflection_probability) || return nothing
-    println(io, "Reflection probability: ", test.details.reflection_probability)
+function _show_test_details(io::IO, ::RadialSymmetryHypothesis, ::Val{:Sn},
+        ::Val{:randomization}, details::NamedTuple)
+    hasproperty(details, :reflection_probability) || return nothing
+    println(io, "Reflection probability: ", details.reflection_probability)
 end
 
-function _show_test_details(io::IO, test::ExtremeValueCopulaTest)
-    hasproperty(test.details, :powers) || return nothing
-    println(io, "Powers:                 ", test.details.powers)
-    println(io, "Multiplier:             ", test.details.multiplier)
-    println(io, "Derivative bandwidth:   ", test.details.derivative_bandwidth)
+function _show_test_details(io::IO, ::ExtremeValueHypothesis, ::Val{:Sn},
+        ::Val{:multiplier}, details::NamedTuple)
+    hasproperty(details, :powers) || return nothing
+    println(io, "Powers:                 ", details.powers)
+    println(io, "Multiplier:             ", details.multiplier)
+    println(io, "Derivative bandwidth:   ", details.derivative_bandwidth)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", test::CopulaTest)
     name = testname(test)
     println(io, name)
     println(io, repeat('-', length(name)))
-    _show_test_model(io, test)
+    h = test.hypothesis
+    statistic = Val(test.statistic)
+    calibration = Val(test.calibration)
+    _show_test_model(io, h, statistic, calibration, test.details)
     println(io, "Number of observations: ", StatsBase.nobs(test))
     println(io, "Dimension:              ", test.dimension)
     println(io, "Statistic:              ", replace(string(test.statistic), '_' => ' '))
     println(io, "Observed value:         ", teststatistic(test))
-    _show_test_details(io, test)
+    _show_test_details(io, h, statistic, calibration, test.details)
     if test.n_resamples > 0
         println(io, "Number of resamples:    ", test.n_resamples)
         println(io, "Calibration:            ", replace(string(test.calibration), '_' => ' '))
@@ -386,5 +379,5 @@ function Base.show(io::IO, ::MIME"text/plain", test::CopulaTest)
     println(io, "p-value:                ", pvalue(test))
     println(io)
     println(io, "Null hypothesis:")
-    print(io, _nullhypothesis(test))
+    print(io, nullhypothesis(test))
 end

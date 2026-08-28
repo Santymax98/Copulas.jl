@@ -1,7 +1,75 @@
 const COPULA_TEST_RESAMPLES = parse(Int, get(ENV, "COPULAS_TEST_RESAMPLES", "19"))
 const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
 
+struct MockHypothesis <: CopulaHypothesis end
+
+Copulas.testname(::MockHypothesis) = "Mock copula hypothesis test"
+Copulas.nullhypothesis(::MockHypothesis) = "The mock null hypothesis holds."
+Copulas._available_statistics(::MockHypothesis) = (:mean, :sum)
+Copulas._available_calibrations(::MockHypothesis, ::Val{:mean}) = (:simulation,)
+Copulas._teststatistic(::MockHypothesis, ::Val{:mean}, U::AbstractMatrix; kwargs...) =
+    sum(U) / length(U)
+Copulas._teststatistic(::MockHypothesis, ::Val{:sum}, U::AbstractMatrix; kwargs...) = sum(U)
+
+function Copulas._simulation_sample(::MockHypothesis, U::AbstractMatrix, rng::Distributions.AbstractRNG)
+    sample = similar(U)
+    Random.rand!(rng, sample)
+    return sample
+end
+
+Copulas._available_statistics(::Copulas.IndependenceHypothesis) = (:cvm, :first_margin_mean)
+Copulas._available_calibrations(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mean}) = (:simulation,)
+
+Copulas._teststatistic(::Copulas.IndependenceHypothesis, ::Val{:first_margin_mean}, U::AbstractMatrix; kwargs...) = sum(@view U[1, :]) / size(U, 2)
+
 @testset "Copula hypothesis tests [copula_tests]" begin
+    @testset "Extensible framework" begin
+        U = rand(Xoshiro(123), 2, 40)
+        test = CopulaTest(MockHypothesis(), U; N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
+
+        @test test isa CopulaTest{MockHypothesis}
+        @test Copulas.default_statistic(MockHypothesis()) === :mean
+        @test Copulas.default_calibration(MockHypothesis(), Val(:mean)) === :simulation
+        @test Copulas.testname(test) == "Mock copula hypothesis test"
+        @test Copulas.nullhypothesis(test) == "The mock null hypothesis holds."
+        @test test.statistic === :mean
+        @test test.calibration === :simulation
+        @test StatsBase.nobs(test) == 40
+        @test isfinite(teststatistic(test))
+        @test 0 < pvalue(test) < 1
+
+        io = IOBuffer()
+        show(io, MIME("text/plain"), test)
+        printed = String(take!(io))
+        @test occursin("Mock copula hypothesis test", printed)
+        @test occursin("The mock null hypothesis holds.", printed)
+
+        extended = IndependenceCopulaTest(U; statistic=:first_margin_mean,
+            N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
+        @test extended isa IndependenceCopulaTest
+        @test extended.statistic === :first_margin_mean
+        @test isfinite(teststatistic(extended))
+        @test IndependenceCopulaTest(U; N=2, rng=Xoshiro(1)).statistic === :cvm
+
+        stat_err = try
+            CopulaTest(MockHypothesis(), U; statistic=:missing, N=2)
+        catch err
+            err
+        end
+        @test stat_err isa ArgumentError
+        @test occursin("Statistic :missing", sprint(showerror, stat_err))
+
+        cal_err = try
+            CopulaTest(MockHypothesis(), U; calibration=:multiplier, N=2)
+        catch err
+            err
+        end
+        @test cal_err isa ArgumentError
+        @test occursin("Calibration :multiplier", sprint(showerror, cal_err))
+
+        @test !(:testname in names(Copulas))
+    end
+
     @testset "IndependenceCopulaTest" begin
         U0 = rand(Xoshiro(123), IndependentCopula(2), 80)
         t0 = IndependenceCopulaTest(U0; N=COPULA_TEST_RESAMPLES, rng=Xoshiro(1))
@@ -73,10 +141,6 @@ const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
         @test occursin("Permutations:", printed)
         @test occursin("Weight:", printed)
 
-        manual = ExchangeabilityCopulaTest(10, 2, 0.1, 0.9, 0, :Sn, :none)
-        @test teststatistic(manual) == 0.1
-        @test pvalue(manual) == 0.9
-
         @test_throws ArgumentError ExchangeabilityCopulaTest(U2; statistic=:Rn, N=9, rng=Xoshiro(1))
         @test_throws ArgumentError ExchangeabilityCopulaTest(U2; calibration=:randomization, N=9, rng=Xoshiro(1))
         @test_throws ArgumentError ExchangeabilityCopulaTest(U2; weight=:wm, N=9, rng=Xoshiro(1))
@@ -109,10 +173,6 @@ const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
         printed = String(take!(io))
         @test occursin("Reflection probability:", printed)
         @test occursin("The copula is radially symmetric.", printed)
-
-        manual = RadialSymmetryCopulaTest(10, 2, 0.1, 0.9, 0, :Sn, :none)
-        @test teststatistic(manual) == 0.1
-        @test pvalue(manual) == 0.9
 
         @test_throws ArgumentError RadialSymmetryCopulaTest(Us; statistic=:cvm, N=9, rng=Xoshiro(1))
         @test_throws ArgumentError RadialSymmetryCopulaTest(Us; calibration=:multiplier, N=9, rng=Xoshiro(1))
@@ -150,10 +210,6 @@ const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
         @test occursin("Powers:", printed)
         @test occursin("The copula belongs to the extreme-value class.", printed)
 
-        manual = ExtremeValueCopulaTest(10, 2, 0.1, 0.9, 0, :Sn, :none)
-        @test teststatistic(manual) == 0.1
-        @test pvalue(manual) == 0.9
-
         @test_throws ArgumentError ExtremeValueCopulaTest(Uev; statistic=:cvm, N=9, rng=Xoshiro(1))
         @test_throws ArgumentError ExtremeValueCopulaTest(Uev; calibration=:simulation, N=9, rng=Xoshiro(1))
         @test_throws ArgumentError ExtremeValueCopulaTest(Uev; powers=1, N=9, rng=Xoshiro(1))
@@ -167,7 +223,7 @@ const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
             N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
 
         @test Ts isa GOFCopulaTest
-        @test Ts.hypothesis === :simple
+        @test Ts.hypothesis.kind === :simple
         @test Ts.statistic === :Sn
         @test Ts.calibration === :parametric_bootstrap
         @test StatsBase.nobs(Ts) == 60
@@ -178,14 +234,14 @@ const COPULA_TEST_TINY_RESAMPLES = min(COPULA_TEST_RESAMPLES, 9)
 
         M = fit(CopulaModel, ClaytonCopula, U; vcov=false)
         Tc = GOFCopulaTest(M; N=COPULA_TEST_TINY_RESAMPLES, rng=Xoshiro(1))
-        @test Tc.hypothesis === :composite
-        @test Tc.model === M
+        @test Tc.hypothesis.kind === :composite
+        @test Tc.hypothesis.model === M
         @test 0 < pvalue(Tc) < 1
 
         Ms = fit(CopulaModel, Copula, U;
             candidates=(ClaytonCopula, GumbelCopula), vcov=false)
         Tsel = GOFCopulaTest(Ms; N=min(COPULA_TEST_TINY_RESAMPLES, 3), rng=Xoshiro(1))
-        @test Tsel.hypothesis === :selected
+        @test Tsel.hypothesis.kind === :selected
         @test 0 < pvalue(Tsel) < 1
 
         io = IOBuffer()
