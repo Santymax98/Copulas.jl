@@ -64,6 +64,29 @@ Pretty p-value formatting: show very small values as inequalities.
 """
 _pstr(p) = p < 1e-16 ? "<1e-16" : Printf.@sprintf("%.4g", p)
 
+function Base.show(io::IO, ::MIME"text/plain", table::CopulaSelectionTable)
+    criterion_label = uppercase(String(table.criterion))
+    println(io, "Copula model selection (criterion: ", criterion_label, ")")
+    _hr(io)
+    Printf.@printf(io, "%-2s %-24s %-14s %-10s %12s %12s\n",
+        "", "Family", "Status", "Method", "LogLik", criterion_label)
+
+    for row in table
+        selected = row.candidate === table.selected_family ? "-" : ""
+        family = replace(string(row.candidate), "Copulas." => "")
+        loglik = isfinite(row.loglikelihood) ?
+            Printf.@sprintf("%.3f", row.loglikelihood) :
+            string(row.loglikelihood)
+        value = getproperty(row, table.criterion)
+        criterion_value = isfinite(value) ? Printf.@sprintf("%.3f", value) : "-"
+        Printf.@printf(io, "%-2s %-24s %-14s %-10s %12s %12s\n",
+            selected, family, String(row.status), String(row.method), loglik, criterion_value)
+    end
+
+    _hr(io)
+    println(io, "- selected model")
+end
+
 """
 Key-value aligned printing for header lines.
 """
@@ -183,6 +206,16 @@ function Base.show(io::IO, M::CopulaModel)
     end
     _kv(io, "Number of observations", Printf.@sprintf("%d", StatsBase.nobs(M)))
 
+    md = M.method_details
+    if get(md, :selection, false)
+        _section(io, "Model selection")
+        _kv(io, "Criterion", uppercase(String(md.criterion)))
+        _kv(io, "Candidate families", string(length(md.candidates)))
+        _kv(io, "Selected family", string(md.selected_family))
+        excluded = count(row -> row.status !== :ok, md.selection_table)
+        excluded > 0 && _kv(io, "Excluded or failed", string(excluded))
+    end
+
     _section(io, "Fit metrics")
     ll  = M.ll
     ll0 = get(M.method_details, :null_ll, NaN)
@@ -280,4 +313,78 @@ function _print_marginals_section(io, S::SklarDist, Vm)
                            lab, distcol, names[j], est_str, se_str, ci_str)
         end
     end
+end
+
+###############################################################################
+##### Copula hypothesis tests
+###############################################################################
+
+_nullhypothesis(::IndependenceCopulaTest) =
+    "The components are mutually independent."
+_nullhypothesis(::ExchangeabilityCopulaTest) =
+    "The copula is exchangeable."
+_nullhypothesis(::RadialSymmetryCopulaTest) =
+    "The copula is radially symmetric."
+_nullhypothesis(::ExtremeValueCopulaTest) =
+    "The copula belongs to the extreme-value class."
+_nullhypothesis(test::GOFCopulaTest) =
+    test.hypothesis === :simple   ? "The data follow the specified copula." :
+    test.hypothesis === :selected ? "At least one candidate copula family adequately describes the dependence." :
+                                    "The data belong to the specified copula family."
+
+_show_test_model(::IO, ::CopulaTest) = nothing
+function _show_test_model(io::IO, test::GOFCopulaTest)
+    label =
+        test.hypothesis === :simple   ? "Specified copula" :
+        test.hypothesis === :selected ? "Selected model" :
+                                        "Fitted model"
+    model = test.model isa CopulaModel ? _copula_of(test.model) : test.model
+    model_label = replace(string(typeof(model)), "Copulas." => "")
+    println(io, "Hypothesis:             ", test.hypothesis)
+    println(io, label, ":           ", model_label)
+end
+
+_show_test_details(::IO, ::CopulaTest) = nothing
+function _show_test_details(io::IO, test::ExchangeabilityCopulaTest)
+    hasproperty(test.details, :permutations) || return nothing
+    println(io, "Permutations:           ", test.details.permutations)
+    println(io, "Weight:                 ", test.details.weight)
+    if hasproperty(test.details, :multiplier)
+        println(io, "Multiplier:             ", test.details.multiplier)
+    end
+    if hasproperty(test.details, :derivative_bandwidth)
+        println(io, "Derivative bandwidth:   ", test.details.derivative_bandwidth)
+    end
+end
+
+function _show_test_details(io::IO, test::RadialSymmetryCopulaTest)
+    hasproperty(test.details, :reflection_probability) || return nothing
+    println(io, "Reflection probability: ", test.details.reflection_probability)
+end
+
+function _show_test_details(io::IO, test::ExtremeValueCopulaTest)
+    hasproperty(test.details, :powers) || return nothing
+    println(io, "Powers:                 ", test.details.powers)
+    println(io, "Multiplier:             ", test.details.multiplier)
+    println(io, "Derivative bandwidth:   ", test.details.derivative_bandwidth)
+end
+
+function Base.show(io::IO, ::MIME"text/plain", test::CopulaTest)
+    name = testname(test)
+    println(io, name)
+    println(io, repeat('-', length(name)))
+    _show_test_model(io, test)
+    println(io, "Number of observations: ", StatsBase.nobs(test))
+    println(io, "Dimension:              ", test.dimension)
+    println(io, "Statistic:              ", replace(string(test.statistic), '_' => ' '))
+    println(io, "Observed value:         ", teststatistic(test))
+    _show_test_details(io, test)
+    if test.n_resamples > 0
+        println(io, "Number of resamples:    ", test.n_resamples)
+        println(io, "Calibration:            ", replace(string(test.calibration), '_' => ' '))
+    end
+    println(io, "p-value:                ", pvalue(test))
+    println(io)
+    println(io, "Null hypothesis:")
+    print(io, _nullhypothesis(test))
 end

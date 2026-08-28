@@ -16,6 +16,7 @@ testfiles = [
     "EllipticalCopulas",
     "ExpectationMaximizationExt",
     "FittingTest",
+    "CopulaTest",
     "MiscelaneousCopulas",
     "NatafTest",
     "SklarDist",

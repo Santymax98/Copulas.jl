@@ -21,6 +21,7 @@ module Copulas
     import Printf
     import TaylorSeries
     import ADTypes
+    import StatsAPI: HypothesisTest, pvalue
 
     # Main code
     include("utils.jl")
@@ -135,6 +136,7 @@ module Copulas
     # Archimax copulas (includes the BB4 and BB5 models)
     include("ArchimaxCopula.jl")
 
+    include("CopulaTest.jl")
 
     include("show.jl")
 
@@ -148,6 +150,7 @@ module Copulas
            𝒲,
            TiltedGenerator,
            EmpiricalGenerator,
+           Copula,
            SklarDist, # SklarDist to make multivariate models
            AMHCopula, # And a bunch of copulas.
            ArchimedeanCopula,
@@ -198,6 +201,16 @@ module Copulas
            BernsteinCopula,
            BetaCopula,
            CheckerboardCopula,
-           CopulaModel
+           CopulaModel,
+           CopulaTest,
+           IndependenceCopulaTest,
+           ExchangeabilityCopulaTest,
+           RadialSymmetryCopulaTest,
+           ExtremeValueCopulaTest,
+           GOFCopulaTest,
+           pvalue,
+           teststatistic,
+           testname,
+           selectiontable
 
 end
