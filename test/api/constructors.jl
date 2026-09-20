@@ -28,6 +28,7 @@ end
     same_model(TCopula(4.0, Σ3), TCopula{3}(4.0, Σ3))
     same_model(BetaCopula(_FIXTURE_DATA), BetaCopula{2}(_FIXTURE_DATA))
     same_model(EmpiricalCopula(_FIXTURE_DATA), EmpiricalCopula{2}(_FIXTURE_DATA))
+    same_model(EmpiricalSmoothCopula(_FIXTURE_DATA, Copulas.BinomialSmoother()), EmpiricalSmoothCopula{2}(_FIXTURE_DATA, Copulas.BinomialSmoother()),)
     same_model(CheckerboardCopula(_FIXTURE_DATA; m=2), CheckerboardCopula{2}(_FIXTURE_DATA; m=2))
     same_model(BernsteinCopula(IndependentCopula{2}(); m=2), BernsteinCopula{2}(IndependentCopula{2}(); m=2))
     same_model(BernsteinCopula(2, _FIXTURE_DATA; m=2), BernsteinCopula{2}(_FIXTURE_DATA; m=2))

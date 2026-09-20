@@ -45,6 +45,7 @@ const BASE_COPULA_CASES = Any[
     copula_case(BernsteinCopula, 2, IndependentCopula{2}(); constructor_kwargs=(; m=2)),
     copula_case(BetaCopula, 2, _FIXTURE_DATA),
     copula_case(CheckerboardCopula, 2, _FIXTURE_DATA; constructor_kwargs=(; m=2)),
+    copula_case(EmpiricalSmoothCopula, 2, _FIXTURE_DATA, Copulas.BinomialSmoother()),
     copula_case(EmpiricalCopula, 2, _FIXTURE_DATA; margin_atol=inv(size(_FIXTURE_DATA, 2))),
     copula_case(EmpiricalEVCopula, 2, _FIXTURE_DATA;
                 constructor_kwargs=(; method=:cfg, pseudo_values=false),

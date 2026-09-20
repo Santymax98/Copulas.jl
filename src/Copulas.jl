@@ -29,6 +29,7 @@ module Copulas
     include("utils.jl")
     include("UnivariateDistribution/quantile.jl")
     include("Copula.jl")
+    include("Smoother.jl")
     include("SklarDist.jl")
     include("Subsetting.jl")
     include("Conditioning.jl")
@@ -82,6 +83,7 @@ module Copulas
     include("MiscellaneousCopulas/FGMCopula.jl")
     include("MiscellaneousCopulas/RafteryCopula.jl")
     include("MiscellaneousCopulas/IndependentCopula.jl")
+    include("EmpiricalSmoothCopula.jl")
     include("MiscellaneousCopulas/MCopula.jl")
     include("MiscellaneousCopulas/WCopula.jl")
 
@@ -145,6 +147,8 @@ module Copulas
     # Archimax copulas (includes the BB4 and BB5 models)
     include("ArchimaxCopula.jl")
 
+    include("Smoother/BinomialSmoother.jl")
+    include("Smoother/BetaBinomialSmoother.jl")
 
     include("CopulaTest.jl")
 
@@ -192,6 +196,8 @@ module Copulas
 
 
     ##### Miscelaneous copulas
+    public Smoother, κ, supports_sample_size, BinomialSmoother, BetaBinomialSmoother
+    export EmpiricalSmoothCopula
     export GaussianCopula, TCopula
     export BernsteinCopula, BetaCopula, CheckerboardCopula, EmpiricalCopula
     export FGMCopula, IndependentCopula, MCopula, WCopula
