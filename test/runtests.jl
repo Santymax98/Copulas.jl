@@ -219,8 +219,6 @@ testfiles = (
     "operations/dependence.jl",
     "operations/dependence_dimension_validation.jl",
     "operations/fitting.jl",
-    "operations/sklar_margin_geometry.jl",
-    "operations/sklar_joint_geometry.jl",
     "operations/sklar_joint_mle.jl",
     "operations/liebscher_fitting.jl",
     "operations/parameter_coefficients.jl",

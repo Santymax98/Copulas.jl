@@ -123,6 +123,10 @@ function _refit(M::CopulaModel, U::AbstractMatrix; replay_input::Bool=false)
         "composite goodness-of-fit refitting is unavailable for this model"))
     spec_kwargs = _unweighted_kwargs(spec.kwargs)
 
+    if spec.target isa SklarDist
+        return Distributions.fit(CopulaModel, spec.target, U; sklar_method=spec.method, spec_kwargs...)
+    end
+
     if spec.target isa Type && spec.target <: SklarDist
         return Distributions.fit(CopulaModel, spec.target, U; spec_kwargs...)
     end
@@ -523,11 +527,15 @@ The default is `sklar_method=:ifm`. The copula fitting step uses `:mle` by defau
 when supported, otherwise the first available method. `margins_kwargs` and
 `copula_kwargs` control the corresponding fits and, for `:jmle`, its initialization.
 
-Joint MLE requires valid unconstrained parameter geometries. The current marginal
-interface supports `Normal`, `Exponential`, and `Gamma`; additional families require
-compatible parameter transformations. Optimization uses LBFGS with automatic
-differentiation where supported and numerical gradients for Gamma margins.
-Convergence is checked, but a global maximum is not guaranteed.
+Joint MLE first uses shared marginal schemas or declared Paramorph geometries for
+`Normal`, `Exponential`, `Gamma`, `Beta`, `Weibull`, and `LogNormal`. Marginals
+without an explicit geometry may use the internal constructor fallback when their
+parameters are a flat tuple of scalars: floating-point parameters are optimized
+and integer parameters remain fixed. Families with no floating-point parameters,
+nested or array parameters, or constructors that do not round-trip through
+`params` are rejected. The fallback uses NelderMead; geometries use LBFGS (with
+automatic differentiation for Normal and Exponential margins and numerical
+gradients otherwise). Convergence is checked, but a global maximum is not guaranteed.
 
 The result is a `CopulaModel` containing the fitted `SklarDist`, log-likelihood,
 original data, and a reproducible fitting recipe. Resampling inference through
@@ -638,6 +646,28 @@ _is_missing_weighted_fit(::Exception) = false
 function Distributions.fit(::Type{CopulaModel}, T::Type{<:SklarDist}, X; kwargs...)
     return _estimate_sklar(T, X; kwargs...)
 end
+
+function _fit_sklar_from_initial(S0::SklarDist, X::AbstractMatrix; sklar_method::Symbol=:jmle, weights=nothing, model::Bool)
+    sklar_method === :jmle || throw(ArgumentError("fitting from a SklarDist instance supports only sklar_method=:jmle"))
+    size(X, 1) == length(S0) || throw(DimensionMismatch("initial SklarDist has dimension $(length(S0)); data has $(size(X, 1)) rows"))
+
+    w = _fit_weights(weights, size(X, 2))
+    fitted = _fit_sklar_joint_mle(S0, X; weights=w)
+    model || return fitted
+
+    ll = _weighted_loglikelihood(fitted, X, w)
+    kwargs = w === nothing ? (;) : (; weights=w)
+    recipe = _CopulaFitSpec(S0, :jmle, kwargs)
+    return CopulaModel(fitted, X, ll, recipe)
+end
+
+function Distributions.fit(S0::SklarDist, X::AbstractMatrix; sklar_method::Symbol=:jmle, weights=nothing)
+    return _fit_sklar_from_initial(S0, X; sklar_method, weights, model=false)
+end
+
+function Distributions.fit(::Type{CopulaModel}, S0::SklarDist, X::AbstractMatrix; sklar_method::Symbol=:jmle, weights=nothing)
+    return _fit_sklar_from_initial(S0, X; sklar_method, weights, model=true)
+end
 ##### StatsBase interfaces.
 """
     nobs(M::CopulaModel) -> Int
@@ -734,7 +764,7 @@ end
 function _copula_data(M::CopulaModel)
     D, data, spec = fitted_distribution(M), M.data, M.recipe
     if D isa SklarDist
-        sklar_method = spec.kwargs.sklar_method
+        sklar_method = get(spec.kwargs, :sklar_method, spec.method)
         sklar_method === :ecdf && return _normalized_pseudos(data, _model_weights(M))
         T = promote_type(float(eltype(data)), mapreduce(eltype, promote_type, D.m))
         U = Matrix{T}(undef, size(data))
