@@ -221,6 +221,7 @@ testfiles = (
     "operations/fitting.jl",
     "operations/sklar_margin_geometry.jl",
     "operations/sklar_joint_geometry.jl",
+    "operations/sklar_joint_mle.jl",
     "operations/liebscher_fitting.jl",
     "operations/parameter_coefficients.jl",
     "operations/sklar_fitting_validation.jl",

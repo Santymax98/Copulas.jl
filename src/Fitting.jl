@@ -503,65 +503,48 @@ function Distributions.fit(::Type{CopulaModel}, CT::Type{<:Copula}, U;
     return _estimate_copula(CT, U; method, pseudo_values, weights, kwargs...)
 end
 
-_available_fitting_methods(::Type{SklarDist}, d) = (:ifm, :ecdf)
+_available_fitting_methods(::Type{SklarDist}, d) = (:ifm, :ecdf, :jmle)
+
 """
     fit(CopulaModel, SklarDist{CT,TplMargins}, X;
         copula_method=:default, sklar_method=:ifm,
         margins_kwargs=NamedTuple(), copula_kwargs=NamedTuple(), kwargs...)
 
-Fit the margins and dependence structure of a Sklar distribution to a `d × n`
-raw-data matrix `X`, with observations in columns. `TplMargins` supplies one
-univariate distribution family per row and `CT` supplies the copula family.
+Fit the margins and dependence structure of a Sklar distribution to a `d × n` raw-data
+matrix `X`, with observations in columns. `TplMargins` supplies the univariate margin
+families and `CT` supplies the copula family.
 
-With `sklar_method=:ifm`, each fitted marginal CDF transforms its row to the
-uniform scale before the copula is fitted. With `:ecdf`, rank
-pseudo-observations are used instead, although the requested parametric margins
-are still fitted for the returned distribution. `margins_kwargs` are forwarded
-to every marginal fit and `copula_kwargs` to the copula fit.
+With `sklar_method=:ifm`, fitted marginal CDFs transform the data before copula fitting.
+With `:ecdf`, rank pseudo-observations are used instead. Both methods are sequential.
+With `:jmle`, the IFM estimate initializes joint maximum-likelihood optimization of all
+free copula and marginal parameters using the complete Sklar log-likelihood.
 
-Both routes are sequential estimators, not joint maximum likelihood for the
-complete Sklar distribution. Generic joint MLE is deliberately unavailable:
-`Distributions.jl` margin families do not expose a common protocol mapping
-their positive, bounded, ordered or interdependent parameters to an
-unconstrained optimization vector. `params` and a constructor alone cannot
-provide that information safely. The default is therefore `sklar_method=:ifm`;
-both Sklar routes use `copula_method=:mle` by default whenever `CT` supports
-MLE, otherwise its first advertised fitting method. That copula step may be
-replaced by another method supported by `CT`.
+The default is `sklar_method=:ifm`. The copula fitting step uses `:mle` by default
+when supported, otherwise the first available method. `margins_kwargs` and
+`copula_kwargs` control the corresponding fits and, for `:jmle`, its initialization.
 
-Moreover, calling `Distributions.fit` for a margin does not establish a generic
-maximum-likelihood contract. The fitting algorithm is selected by each
-distribution family and is not exposed here as a stable estimator protocol; it
-may therefore differ between margins and need not be maximum likelihood. A
-joint Sklar MLE cannot safely treat those independent calls as MLE building
-blocks without a stronger upstream or Copulas.jl-specific interface.
+Joint MLE requires valid unconstrained parameter geometries. The current marginal
+interface supports `Normal`, `Exponential`, and `Gamma`; additional families require
+compatible parameter transformations. Optimization uses LBFGS with automatic
+differentiation where supported and numerical gradients for Gamma margins.
+Convergence is checked, but a global maximum is not guaranteed.
 
-The result is a `CopulaModel` whose `result` is the fitted `SklarDist`. Calling
-[`infer`](@ref) with a resampling method repeats the complete sequential
-estimator, including every marginal fit and the copula fit. Analytical
-covariance is deliberately not inferred for the arbitrary marginal estimators
-selected by `Distributions.fit`. Use `fit(SklarDist{...}, X; ...)` when only
-the fitted distribution is required.
+The result is a `CopulaModel` containing the fitted `SklarDist`, log-likelihood,
+original data, and a reproducible fitting recipe. Resampling inference through
+[`infer`](@ref) repeats the complete estimator, including joint optimization for
+`:jmle`. Use `fit(SklarDist{...}, X; ...)` to return only the fitted distribution.
 
-`SklarDist{CT,TplMargins}` is public here specifically as a fitting target:
-`CT` selects the copula family and `TplMargins == Tuple{M₁,...,M_d}` selects the
-marginal families. This exception does not expose arbitrary storage type
-parameters or the concrete representation of constructed `SklarDist` values.
+`SklarDist{CT,TplMargins}` is public as a fitting target, with
+`TplMargins == Tuple{M₁,...,M_d}` specifying the marginal families. This syntax
+does not expose the internal representation of constructed `SklarDist` values.
 
-`weights` gives one non-negative, finite weight per observation, not all zero,
-normalized to sum to `n` as in the copula-only `fit`, and every step reads the
-same vector: margin `i` is fitted by `Distributions.fit(Mᵢ, xᵢ, w)`, which is
-the weighted maximum-likelihood fit `fit_mle(Mᵢ, xᵢ, w)` that Distributions.jl
-defines for the families with weighted sufficient statistics, and a margin
-family without one is refused by name, and a zero-weight observation is
-dropped before the margin sees it, as [`_weighted_sample`](@ref) drops it
-before the copula engine; `:ecdf` ranks by weighted mass as
-[`pseudos`](@ref) does; the copula is fitted with the same `weights`; the
-stored log-likelihood is the weighted one. Unit weights reproduce the
-unweighted margins up to rounding, since Distributions.jl reduces its weighted
-sufficient statistics in another order, and integer weights summing to `n`
-reproduce the fit of the sample in which each observation is repeated that
-many times. `weights` is a keyword of `fit` itself, not of `copula_kwargs`.
+`weights` specifies finite, non-negative observation weights, not all zero,
+normalized to sum to `n`. Zero-weight observations are excluded from fitting.
+Sequential methods use weighted marginal and copula fits; `:ecdf` uses weighted
+ranks. Joint MLE maximizes the complete weighted log-likelihood after weighted
+IFM initialization. Integer weights summing to `n` reproduce observation
+replication up to numerical tolerances. Pass `weights` directly to `fit`, not
+through `copula_kwargs`.
 """
 function _estimate_sklar(T::Type{SklarDist{CT,TplMargins}}, X;
                          copula_method=:default, sklar_method=:ifm,
@@ -595,7 +578,7 @@ function _estimate_sklar(T::Type{SklarDist{CT,TplMargins}}, X;
         init=float(eltype(X)),
     )
     U = similar(X, uniform_type)
-    if sklar_method === :ifm
+    if sklar_method in (:ifm, :jmle)
         lower = nextfloat(zero(uniform_type))
         upper = prevfloat(one(uniform_type))
         @inbounds for j in axes(X, 2), i in axes(X, 1)
@@ -612,12 +595,13 @@ function _estimate_sklar(T::Type{SklarDist{CT,TplMargins}}, X;
                                          copula_kwargs...)
 
     S = SklarDist(cop_estimate.result, m)
+    sklar_method === :jmle && (S = _fit_sklar_joint_mle(S, X; weights=w))
     model || return S
     ll = _weighted_loglikelihood(S, X, w)
     fit_kwargs = (; copula_method=cop_estimate.method, sklar_method,
                     margins_kwargs, copula_kwargs)
     w === nothing || (fit_kwargs = (; fit_kwargs..., weights=w))
-    recipe = _CopulaFitSpec(T, cop_estimate.method, fit_kwargs)
+    recipe = _CopulaFitSpec(T, sklar_method === :jmle ? :jmle : cop_estimate.method, fit_kwargs)
     return CopulaModel(S, X, ll, recipe)
 end
 

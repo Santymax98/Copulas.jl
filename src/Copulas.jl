@@ -164,6 +164,7 @@ module Copulas
     include("ParamorphFitting.jl")
     include("SklarMarginGeometry.jl")
     include("SklarJointGeometry.jl")
+    include("SklarJointMLE.jl")
     # Natural model-parameter representations are resolved only after every
     # component family has declared its Paramorph schema.
     include("NaturalParameters.jl")
