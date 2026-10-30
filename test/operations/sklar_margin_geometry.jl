@@ -21,26 +21,16 @@
             @test all(isfinite, z)
 
             # Free coordinates -> natural parameters
-            recovered =
-                Copulas._sklar_margin_from_coordinates(Family, z)
+            recovered = Copulas._sklar_margin_from_coordinates(Family, z)
 
             @test recovered isa Family
 
-            @test all(
-                isapprox(a, b; rtol=1e-12, atol=1e-12)
-                for (a, b) in zip(
-                    params(recovered), params(original)
-                )
-            )
+            @test all(isapprox(a, b; rtol=1e-12, atol=1e-12) for (a, b) in zip(params(recovered), params(original)))
 
             # Differentiation of the marginal log-likelihood
             objective(v) = begin
-                margin = Copulas._sklar_margin_from_coordinates(
-                    Family, v
-                )
-                return sum(
-                    logpdf(margin, x) for x in (1.1, 1.7)
-                )
+                margin = Copulas._sklar_margin_from_coordinates(Family, v)
+                return sum(logpdf(margin, x) for x in (1.1, 1.7))
             end
 
             gradient = ForwardDiff.gradient(objective, z)
