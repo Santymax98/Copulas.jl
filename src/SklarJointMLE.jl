@@ -64,8 +64,10 @@ end
 # `params` are flat tuples of scalar real values. Within this experiment,
 # AbstractFloat parameters are treated as free and Integer parameters as fixed;
 # those are prototype conventions, not a general declaration of estimability
-# or structural status. Families with no floating-point parameters are
-# rejected; other parameter layouts require an explicit geometry.
+# or structural status. Parameterless distributions are retained as fixed
+# components. Families with parameters but no floating-point values are
+# rejected, because their estimability cannot be inferred; other parameter
+# layouts require an explicit geometry.
 
 """
     _sklar_constructor_oracle_coordinates(margin)
@@ -75,6 +77,7 @@ Extract experimental constructor-oracle coordinates from a marginal.
 function _sklar_constructor_oracle_coordinates(margin::Distributions.UnivariateDistribution)
     parameters = Distributions.params(margin)
     parameters isa Tuple || throw(ArgumentError("$(typeof(margin)): params must be a tuple"))
+    isempty(parameters) && return Float64[]
     all(x -> x isa AbstractFloat || x isa Integer, parameters) ||
         throw(ArgumentError("$(typeof(margin)): nested, array, and nonnumeric parameters require a declared geometry"))
     all(isfinite, parameters) ||
@@ -104,6 +107,7 @@ function _sklar_constructor_oracle_from_coordinates(
     nfree = count(x -> x isa AbstractFloat, parameters)
     length(coordinates) == nfree ||
         throw(DimensionMismatch("expected $nfree marginal coordinates"))
+    nfree == 0 && return margin
 
     k = 0
     reconstructed_parameters = ntuple(length(parameters)) do i
@@ -150,18 +154,21 @@ function _sklar_margin_mode(margin::Distributions.UnivariateDistribution)
     geometry = typeof(margin)
     Paramorph.has_parameter_geometry(geometry) && return :paramorph
     _sklar_margin_has_schema(geometry) && return :paramorph
+    Distributions.params(margin) === () && return :fixed
     return :constructor_oracle
 end
 
 function _sklar_margin_coordinates(margin::Distributions.UnivariateDistribution, mode::Symbol)
     mode === :paramorph && return _sklar_margin_coordinates(margin)
     mode === :constructor_oracle && return _sklar_constructor_oracle_coordinates(margin)
+    mode === :fixed && return Float64[]
     throw(ArgumentError("unknown Sklar marginal parameterization $mode"))
 end
 
 function _sklar_margin_from_coordinates(margin::Distributions.UnivariateDistribution, coordinates::AbstractVector{<:Real}, mode::Symbol,)
     mode === :paramorph && return _sklar_margin_from_coordinates(margin, coordinates)
     mode === :constructor_oracle && return _sklar_constructor_oracle_from_coordinates(margin, coordinates)
+    mode === :fixed && return _sklar_constructor_oracle_from_coordinates(margin, coordinates)
     throw(ArgumentError("unknown Sklar marginal parameterization $mode"))
 end
 
@@ -223,6 +230,73 @@ _sklar_joint_optimizer_kind(chart::_SklarJointChart) = any(==( :constructor_orac
 
 # Joint maximum-likelihood optimization for Sklar distributions.
 
+function _sklar_joint_central_gradient(objective, z::AbstractVector{<:Real}; step=1e-4)
+    gradient = similar(z, Float64)
+
+    for i in eachindex(z)
+        h = step * max(1.0, abs(z[i]))
+        zplus = copy(z)
+        zminus = copy(z)
+        zplus[i] += h
+        zminus[i] -= h
+        gradient[i] = (objective(zplus) - objective(zminus)) / (2h)
+    end
+
+    return gradient
+end
+
+function _sklar_joint_dual_method_error(err)
+    err isa MethodError || return false
+    err.f isa Function && parentmodule(err.f) === (@__MODULE__) && return false
+    return any(arg -> arg isa ForwardDiff.Dual || (arg isa Type && arg <: ForwardDiff.Dual), err.args)
+end
+
+function _sklar_joint_primal_coordinates(z::AbstractVector)
+    return Float64[x isa ForwardDiff.Dual ? ForwardDiff.value(x) : x for x in z]
+end
+
+function _sklar_joint_primal_objective(chart::_SklarJointChart, X, weights, z)
+    primal = _sklar_joint_primal_coordinates(z)
+    S = _sklar_joint_distribution(chart, primal)
+    return -_weighted_loglikelihood(S, X, weights)
+end
+
+function _sklar_joint_dual_numeric_error(err, objective, chart, X, weights, z)
+    err isa LinearAlgebra.PosDefException || return false
+    primal_value = try
+        _sklar_joint_primal_objective(chart, X, weights, z)
+    catch primal_err
+        primal_err isa LinearAlgebra.PosDefException || rethrow()
+        return false
+    end
+    return isfinite(primal_value)
+end
+
+function _sklar_joint_lbfgs_autodiff(objective, z0::AbstractVector{<:Real}; chart=nothing, X=nothing, weights=nothing)
+    finite_autodiff = ADTypes.AutoFiniteDiff(; fdtype=Val(:central), relstep=1e-4, absstep=1e-4)
+    gradient = try
+        ForwardDiff.gradient(objective, z0)
+    catch err
+        if !isnothing(chart) && _sklar_joint_dual_numeric_error(err, objective, chart, X, weights, z0)
+            return finite_autodiff
+        end
+        _sklar_joint_dual_method_error(err) || rethrow()
+        return finite_autodiff
+    end
+
+    all(isfinite, gradient) || return finite_autodiff
+
+    numerical_gradient = _sklar_joint_central_gradient(objective, z0)
+    all(isfinite, numerical_gradient) || return finite_autodiff
+
+    difference = sqrt(sum(abs2, gradient - numerical_gradient))
+    scale = max(1.0, sqrt(sum(abs2, gradient)), sqrt(sum(abs2, numerical_gradient)))
+
+    return difference <= 1e-4 * scale ?
+           ADTypes.AutoForwardDiff() :
+           finite_autodiff
+end
+
 function _sklar_joint_objective(chart::_SklarJointChart, X::AbstractMatrix, weights, z)
     S = try
         _sklar_joint_distribution(chart, z)
@@ -231,7 +305,19 @@ function _sklar_joint_objective(chart::_SklarJointChart, X::AbstractMatrix, weig
         rethrow()
     end
 
-    value = -_weighted_loglikelihood(S, X, weights)
+    value = try
+        -_weighted_loglikelihood(S, X, weights)
+    catch err
+        err isa LinearAlgebra.PosDefException || rethrow()
+        primal_value = try
+            _sklar_joint_primal_objective(chart, X, weights, z)
+        catch primal_err
+            primal_err isa LinearAlgebra.PosDefException || rethrow()
+            return Inf
+        end
+        isfinite(primal_value) && rethrow()
+        return Inf
+    end
     return isfinite(value) ? value : Inf
 end
 
@@ -240,15 +326,26 @@ end
 
 Maximize the complete Sklar log-likelihood, starting from S0.
 
-Uses ForwardDiff when all margins are Normal or Exponential, and
-finite-difference gradients otherwise.
+Uses validated ForwardDiff when available and central finite differences
+otherwise.
 """
 function _fit_sklar_joint_mle(S0::SklarDist, X::AbstractMatrix; weights=nothing)
     chart = _sklar_joint_chart(S0)
     z0 = _sklar_joint_coordinates(chart)
     Xfit, wfit = _weighted_sample(X, weights)
 
-    objective(z) = _sklar_joint_objective(chart, Xfit, wfit, z)
+    last_valid = Ref(copy(z0))
+    last_dual_primal = Ref{Union{Nothing,Vector{Float64}}}(nothing)
+    objective(z) = begin
+        if !(eltype(z) <: AbstractFloat)
+            last_dual_primal[] = _sklar_joint_primal_coordinates(z)
+        end
+        value = _sklar_joint_objective(chart, Xfit, wfit, z)
+        if eltype(z) <: AbstractFloat && isfinite(value)
+            last_valid[] = copy(z)
+        end
+        value
+    end
 
     initial = objective(z0)
     isfinite(initial) || throw(ArgumentError("JMLE requires a finite initial log-likelihood"))
@@ -258,10 +355,37 @@ function _fit_sklar_joint_mle(S0::SklarDist, X::AbstractMatrix; weights=nothing)
 
     result = if optimizer_kind === :nelder_mead
         Optim.optimize(objective, z0, Optim.NelderMead(), Optim.Options(; iterations=2500))
-    elseif any(m -> !(m isa Union{Distributions.Normal,Distributions.Exponential}), S0.m)
-        Optim.optimize(objective, z0, Optim.LBFGS())
     else
-        Optim.optimize(objective, z0, Optim.LBFGS(); autodiff=ADTypes.AutoForwardDiff())
+        autodiff = _sklar_joint_lbfgs_autodiff(objective, z0; chart, X=Xfit, weights=wfit)
+        result = try
+            Optim.optimize(objective, z0, Optim.LBFGS(); autodiff)
+        catch err
+            err isa LinearAlgebra.PosDefException || rethrow()
+            isnothing(last_dual_primal[]) && rethrow()
+            primal_value = try
+                _sklar_joint_primal_objective(chart, Xfit, wfit, last_dual_primal[])
+            catch primal_err
+                primal_err isa LinearAlgebra.PosDefException || rethrow()
+                Inf
+            end
+            isfinite(primal_value) || rethrow()
+            nothing
+        end
+        needs_recovery = isnothing(result) ||
+            (!Optim.converged(result) && !isnothing(last_dual_primal[]) &&
+             !isfinite(try
+                 _sklar_joint_primal_objective(chart, Xfit, wfit, last_dual_primal[])
+             catch primal_err
+                 primal_err isa LinearAlgebra.PosDefException ? Inf : rethrow()
+             end))
+        if needs_recovery
+            isfinite(objective(last_valid[])) ||
+                throw(ErrorException("JMLE could not recover a finite Float64 starting point"))
+            Optim.optimize(objective, last_valid[], Optim.LBFGS();
+                           autodiff=ADTypes.AutoFiniteDiff(; fdtype=Val(:central), relstep=1e-4, absstep=1e-4))
+        else
+            result
+        end
     end
 
     zhat = Optim.minimizer(result)

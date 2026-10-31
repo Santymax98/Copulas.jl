@@ -123,6 +123,70 @@ end
     end
 end
 
+@testset "Generic JMLE differentiation selection" begin
+    rng = MersenneTwister(2031)
+    cases = (
+        (Normal(), Copulas.ADTypes.AutoForwardDiff),
+        (Exponential(), Copulas.ADTypes.AutoForwardDiff),
+        (Weibull(1.8, 1.2), Copulas.ADTypes.AutoForwardDiff),
+        (LogNormal(0.2, 0.9), Copulas.ADTypes.AutoForwardDiff),
+        (Gamma(2.5, 1.1), Copulas.ADTypes.AutoFiniteDiff),
+        (Beta(2.3, 3.7), Copulas.ADTypes.AutoFiniteDiff),
+    )
+
+    for (margin, autodiff_type) in cases
+        S = SklarDist(ClaytonCopula{2}(0.8), (Normal(0.0, 1.5), margin))
+        X = rand(rng, S, 24)
+        chart = Copulas._sklar_joint_chart(S)
+        z = Copulas._sklar_joint_coordinates(chart)
+        objective(v) = Copulas._sklar_joint_objective(chart, X, nothing, v)
+        autodiff = Copulas._sklar_joint_lbfgs_autodiff(objective, z)
+
+        @test autodiff isa autodiff_type
+    end
+
+    @test Copulas._sklar_joint_lbfgs_autodiff(_ -> Inf, [0.0]) isa Copulas.ADTypes.AutoFiniteDiff
+    @test_throws ErrorException Copulas._sklar_joint_lbfgs_autodiff(_ -> error("test error"), [0.0])
+end
+
+@testset "JMLE numerical recovery" begin
+    rng = MersenneTwister(2032)
+
+    S3 = SklarDist(GaussianCopula([
+        1.0 0.30 -0.20
+        0.30 1.0 0.45
+        -0.20 0.45 1.0]), (Normal(), Normal(), Normal()))
+    X3 = rand(rng, S3, 45)
+    chart3 = Copulas._sklar_joint_chart(S3)
+    zbad = [79.50806956416622, -8.299203551788883, 113.12433239604641,
+            66.87414464081553, -123.57518091806037, 53.16701546200909,
+            -116.440604901349, 73.68877658770283, -40.27763925745332]
+    @test Copulas._sklar_joint_objective(chart3, X3, nothing, zbad) == Inf
+
+    S5 = SklarDist(GaussianCopula([
+        1.0 0.20 -0.15 0.10 0.30
+        0.20 1.0 0.40 -0.25 0.05
+        -0.15 0.40 1.0 0.35 -0.10
+        0.10 -0.25 0.35 1.0 0.20
+        0.30 0.05 -0.10 0.20 1.0]), ntuple(_ -> Normal(), 5))
+    X5 = rand(rng, S5, 45)
+    chart5 = Copulas._sklar_joint_chart(S5)
+    z5 = Copulas._sklar_joint_coordinates(chart5)
+    @test Copulas._sklar_joint_lbfgs_autodiff(
+        z -> Copulas._sklar_joint_objective(chart5, X5, nothing, z), z5;
+        chart=chart5, X=X5, weights=nothing) isa Copulas.ADTypes.AutoFiniteDiff
+
+    for (S, X, expected) in ((S3, X3, 9), (S5, X5, 20))
+        M = fit(CopulaModel, S, X; sklar_method=:jmle)
+        ll = loglikelihood(M)
+        @test StatsBase.dof(M) == expected
+        @test length(StatsBase.coef(M)) == expected
+        @test isapprox(StatsBase.aic(M), 2 * expected - 2 * ll)
+        @test isapprox(StatsBase.bic(M), expected * log(size(X, 2)) - 2 * ll)
+        @test isfinite(ll)
+    end
+end
+
 @testset "Constructor-oracle marginal geometry" begin
     margins = (
         Cauchy(0.5, 1.3),
@@ -156,6 +220,13 @@ end
     @test occursin("no floating-point parameters", sprint(showerror, err))
     @test_throws DimensionMismatch Copulas._sklar_constructor_oracle_from_coordinates(Poisson(2.5), Float64[])
     @test_throws DomainError Copulas._sklar_constructor_oracle_from_coordinates(Uniform(0.0, 1.0), [2.0, 1.0])
+
+    fixed_margin = Kolmogorov()
+    fixed_chart = Copulas._sklar_joint_chart(
+        SklarDist(IndependentCopula{2}(), (fixed_margin, Normal())))
+    @test fixed_chart.margin_modes == (:fixed, :paramorph)
+    @test Copulas._sklar_joint_optimizer_kind(fixed_chart) === :lbfgs
+    @test Copulas._sklar_joint_distribution(fixed_chart, Copulas._sklar_joint_coordinates(fixed_chart)).m[1] === fixed_margin
 end
 
 @testset "Constructor-oracle JMLE fallback" begin
@@ -253,6 +324,14 @@ end
     @test length(StatsBase.coef(M_erlang)) == 4
     @test isapprox(StatsBase.aic(M_erlang), 2 * 3 - 2 * ll)
     @test isapprox(StatsBase.bic(M_erlang), 3 * log(80) - 2 * ll)
+
+    S0_fixed = SklarDist(IndependentCopula{2}(), (Kolmogorov(), Normal()))
+    X_fixed = rand(rng, S0_fixed, 60)
+    M_fixed = fit(CopulaModel, S0_fixed, X_fixed; sklar_method=:jmle)
+
+    @test params(fitted_distribution(M_fixed).m[1]) == ()
+    @test StatsBase.dof(M_fixed) == 2
+    @test isfinite(loglikelihood(M_fixed))
 end
 
 @testset "Sklar joint maximum likelihood" begin
