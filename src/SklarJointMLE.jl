@@ -99,10 +99,7 @@ Reconstruct a marginal with the experimental constructor oracle. Integer
 parameters remain those of `margin`; floating-point parameters are replaced
 in parameter order and validated by the original constructor.
 """
-function _sklar_constructor_oracle_from_coordinates(
-    margin::Distributions.UnivariateDistribution,
-    coordinates::AbstractVector{<:Real},
-)
+function _sklar_constructor_oracle_from_coordinates(margin::Distributions.UnivariateDistribution, coordinates::AbstractVector{<:Real},)
     parameters = Distributions.params(margin)
     nfree = count(x -> x isa AbstractFloat, parameters)
     length(coordinates) == nfree ||

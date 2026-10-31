@@ -533,9 +533,8 @@ without an explicit geometry may use the internal constructor fallback when thei
 parameters are a flat tuple of scalars: floating-point parameters are optimized
 and integer parameters remain fixed. Families with no floating-point parameters,
 nested or array parameters, or constructors that do not round-trip through
-`params` are rejected. The fallback uses NelderMead; geometries use LBFGS (with
-automatic differentiation for Normal and Exponential margins and numerical
-gradients otherwise). Convergence is checked, but a global maximum is not guaranteed.
+`params` are rejected; distributions with no free parameters remain fixed.
+Convergence and finiteness are checked, but a global maximum is not guaranteed.
 
 The result is a `CopulaModel` containing the fitted `SklarDist`, log-likelihood,
 original data, and a reproducible fitting recipe. Resampling inference through
